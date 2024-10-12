@@ -112,7 +112,7 @@ def get_upcoming_holiday():
         return None
 
 def create_collection_with_recommendations(plex, recommendations_df, media_type, collection_name):
-    """Create or update a Plex collection with recommended items."""
+    """Create or update a Plex collection with recommended items and feature it on the home screen."""
     plex_items = []
     missing_titles = []
 
@@ -153,6 +153,14 @@ def create_collection_with_recommendations(plex, recommendations_df, media_type,
             except BadRequest as e:
                 print(f"Error creating collection: {e}")
                 return missing_titles
+
+        # Feature the collection on the home screen
+        try:
+            collection.edit(**{"smart": 0, "promote": 1})
+            print(f"Collection '{collection_name}' featured on the home screen.")
+        except Exception as e:
+            print(f"Error featuring collection on home screen: {e}")
+
         print(f"Collection '{collection_name}' updated with {len(plex_items)} items.")
     else:
         print(f"No recommended items found in your Plex library for {collection_name}. Skipping collection creation.")
@@ -161,7 +169,7 @@ def create_collection_with_recommendations(plex, recommendations_df, media_type,
         print(f"\nRecommended items not found in your Plex library for {collection_name}:")
         for title in missing_titles:
             print(f"- {title}")
-    
+
     return missing_titles
 
 def add_to_ombi(missing_titles, collection_name):
