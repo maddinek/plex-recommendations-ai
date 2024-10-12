@@ -36,21 +36,42 @@ def get_watched_titles(plex):
     print(f"Total watched titles retrieved: {len(watched_titles)}")
     return watched_titles
 
+def get_user_preferences(plex):
+    """Retrieve user's favorite movies/shows and ratings from Plex."""
+    favorites = []
+    ratings = {}
+
+    # Get favorites and ratings from Movies
+    for movie in plex.library.section('Movies').all():
+        if movie.userRating:
+            ratings[movie.title] = movie.userRating
+        if movie.isFavorite:
+            favorites.append(movie.title)
+
+    # Get favorites and ratings from TV Shows
+    for show in plex.library.section('TV Shows').all():
+        if show.userRating:
+            ratings[show.title] = show.userRating
+        if show.isFavorite:
+            favorites.append(show.title)
+
+    return favorites, ratings
+
 def get_recommendations(prompt, media_type):
     """Get recommendations from GPT-4o mini API."""
     config = read_config()
     API_KEY = config.get('GPT', 'GPT4O_API_KEY')
-    
+
     if not API_KEY:
         raise Exception("GPT4O_API_KEY not found in configuration file.")
-    
+
     url = 'https://api.openai.com/v1/chat/completions'
-    
+
     headers = {
         'Authorization': f'Bearer {API_KEY}',
         'Content-Type': 'application/json',
     }
-    
+
     data = {
         'model': 'gpt-4o-mini',
         'messages': [
@@ -61,12 +82,12 @@ def get_recommendations(prompt, media_type):
         'temperature': 0.7,
         'n': 1,
     }
-    
+
     response = requests.post(url, headers=headers, json=data)
-    
+
     if response.status_code != 200:
         raise Exception(f"API request failed with status {response.status_code}: {response.text}")
-    
+
     return response.json()
 
 def parse_recommendations(response_text):
@@ -154,6 +175,13 @@ def create_collection_with_recommendations(plex, recommendations_df, media_type,
                 print(f"Error creating collection: {e}")
                 return missing_titles
 
+        # Update collection summary with reasons
+        summary = "Recommendations based on your watch history, favorites, and ratings:\n\n"
+        for _, row in recommendations_df.iterrows():
+            if row['title'] in [item.title for item in plex_items]:
+                summary += f"- {row['title']}: {row['reason']}\n"
+        collection.edit(summary=summary)
+
         # Feature the collection on the home screen
         try:
             collection.edit(**{"smart": 0, "promote": 1})
@@ -199,12 +227,12 @@ def add_to_ombi(missing_titles, collection_name):
             try:
                 search_url = f"{OMBI_URL}/api/v1/Search/multi/{title}"
                 search_response = requests.get(search_url, headers=headers, timeout=timeout)
-                
+
                 if search_response.status_code == 200:
                     search_results = search_response.json()
                     if search_results:
                         media_result = next((item for item in search_results if item['type'] in ['movie', 'tv']), None)
-                        
+
                         if media_result:
                             media_type = media_result['type']
                             if media_type == 'movie':
@@ -220,9 +248,9 @@ def add_to_ombi(missing_titles, collection_name):
                                     'requestAll': True,
                                     'languageCode': 'en'
                                 }
-                            
+
                             request_response = requests.post(request_url, headers=headers, json=request_data, timeout=timeout)
-                            
+
                             if request_response.status_code == 200:
                                 print(f"  - Successfully added to Ombi: {title}")
                             else:
@@ -237,20 +265,20 @@ def add_to_ombi(missing_titles, collection_name):
                 print(f"  - Timeout occurred while processing: {title}. The request took longer than {timeout} seconds to complete.")
             except RequestException as e:
                 print(f"  - An error occurred while processing: {title}. Error: {str(e)}")
-            
+
             time.sleep(1)  # Add a small delay between requests
-        
+
         print(f"Finished processing Ombi additions for {collection_name}.")
     else:
         print(f"No missing titles to add to Ombi for {collection_name}.")
 
 def main():
     start_time = time.time()
-    
+
     config = read_config()
     PLEX_URL = config.get('PLEX', 'PLEX_URL')
     PLEX_TOKEN = config.get('PLEX', 'PLEX_TOKEN')
-    
+
     if not PLEX_URL or not PLEX_TOKEN:
         print("Error: PLEX_URL and/or PLEX_TOKEN not found in configuration file.")
         return
@@ -262,8 +290,10 @@ def main():
         return
 
     watched_titles = get_watched_titles(plex)
-    if not watched_titles:
-        print("No watched titles found in your Plex library.")
+    favorites, ratings = get_user_preferences(plex)
+
+    if not watched_titles and not favorites and not ratings:
+        print("No watched titles, favorites, or ratings found in your Plex library.")
         return
 
     updated_collections = []
@@ -275,12 +305,19 @@ def main():
 
         {', '.join(watched_titles)}
 
-        Based on this list, recommend 10 new {media_type.lower()}s that I might like. For each recommendation, provide the following in JSON format:
+        My favorite titles are:
+        {', '.join(favorites)}
+
+        I have rated the following titles (out of 10):
+        {', '.join([f"{title} ({rating})" for title, rating in ratings.items()])}
+
+        Based on this information, recommend 10 new {media_type.lower()}s that I might like. For each recommendation, provide the following in JSON format:
 
         {{
           "title": "Title of the {media_type.lower()}",
           "genre": "Genre(s)",
-          "description": "A brief description"
+          "description": "A brief description",
+          "reason": "A brief explanation of why this is recommended based on my preferences"
         }}
 
         Please provide the entire response as a JSON array of objects.
@@ -292,8 +329,8 @@ def main():
             recommendations_text = response['choices'][0]['message']['content'].strip()
             recommendations = parse_recommendations(recommendations_text)
             valid_recommendations = [
-                rec for rec in recommendations 
-                if isinstance(rec, dict) and all(key in rec for key in ('title', 'genre', 'description'))
+                rec for rec in recommendations
+                if isinstance(rec, dict) and all(key in rec for key in ('title', 'genre', 'description', 'reason'))
             ]
             if valid_recommendations:
                 recommendations_df = pd.DataFrame(valid_recommendations)
@@ -334,7 +371,8 @@ def main():
         {{
           "title": "Title of the movie",
           "genre": "Genre(s)",
-          "description": "A brief description"
+          "description": "A brief description",
+          "reason": "A brief explanation of why this movie fits the criteria"
         }}
 
         Please provide the entire response as a JSON array of objects.
@@ -346,8 +384,8 @@ def main():
             recommendations_text = response['choices'][0]['message']['content'].strip()
             recommendations = parse_recommendations(recommendations_text)
             valid_recommendations = [
-                rec for rec in recommendations 
-                if isinstance(rec, dict) and all(key in rec for key in ('title', 'genre', 'description'))
+                rec for rec in recommendations
+                if isinstance(rec, dict) and all(key in rec for key in ('title', 'genre', 'description', 'reason'))
             ]
             if valid_recommendations:
                 recommendations_df = pd.DataFrame(valid_recommendations)
