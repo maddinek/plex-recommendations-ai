@@ -2,4 +2,6 @@ requests
 pandas
 plexapi
 configparser
+podman-compose
+aiohttp
 

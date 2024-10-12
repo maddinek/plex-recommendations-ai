@@ -9,6 +9,9 @@ output/
 
 # Python virtual environment
 venv/
+myenv/  # Added your environment
+
+# Byte-compiled / cached files
 *.pyc
 __pycache__/
 

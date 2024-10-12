@@ -4,12 +4,13 @@ import json
 import pandas as pd
 from plexapi.server import PlexServer
 from plexapi.exceptions import NotFound, BadRequest
-from plexapi.video import Movie, Show
-from plexapi.library import MovieSection, ShowSection
 import time
 import configparser
 from datetime import datetime
 from requests.exceptions import RequestException, Timeout
+
+# import logging
+# logging.basicConfig(level=logging.DEBUG)
 
 def read_config(config_file=None):
     """Read configuration from the specified file or environment variable."""
@@ -18,6 +19,15 @@ def read_config(config_file=None):
     config = configparser.ConfigParser()
     config.read(config_file)
     return config
+
+def check_ombi_credentials(config):
+    """Check if Ombi credentials are set in the config."""
+    try:
+        ombi_url = config.get('OMBI', 'OMBI_URL')
+        ombi_api_key = config.get('OMBI', 'OMBI_API_KEY')
+        return bool(ombi_url and ombi_api_key)
+    except (configparser.NoSectionError, configparser.NoOptionError):
+        return False
 
 def get_watched_titles(plex):
     """Retrieve watched movies and TV shows from Plex."""
@@ -37,25 +47,23 @@ def get_watched_titles(plex):
     return watched_titles
 
 def get_user_preferences(plex):
-    """Retrieve user's favorite movies/shows and ratings from Plex."""
-    favorites = []
+    """Retrieve user's ratings for movies and TV shows from Plex."""
     ratings = {}
 
-    # Get favorites and ratings from Movies
+    print("Retrieving user ratings from Plex...")
+
+    # Get ratings from Movies
     for movie in plex.library.section('Movies').all():
-        if movie.userRating:
+        if hasattr(movie, 'userRating') and movie.userRating is not None:
             ratings[movie.title] = movie.userRating
-        if movie.isFavorite:
-            favorites.append(movie.title)
 
-    # Get favorites and ratings from TV Shows
+    # Get ratings from TV Shows
     for show in plex.library.section('TV Shows').all():
-        if show.userRating:
+        if hasattr(show, 'userRating') and show.userRating is not None:
             ratings[show.title] = show.userRating
-        if show.isFavorite:
-            favorites.append(show.title)
 
-    return favorites, ratings
+    print(f"Found {len(ratings)} rated titles.")
+    return ratings
 
 def get_recommendations(prompt, media_type):
     """Get recommendations from GPT-4o mini API."""
@@ -200,77 +208,133 @@ def create_collection_with_recommendations(plex, recommendations_df, media_type,
 
     return missing_titles
 
-def add_to_ombi(missing_titles, collection_name):
-    """Add missing titles to Ombi for requesting."""
-    config = read_config()
-    try:
-        OMBI_URL = config.get('OMBI', 'OMBI_URL')
-        OMBI_API_KEY = config.get('OMBI', 'OMBI_API_KEY')
-    except (configparser.NoSectionError, configparser.NoOptionError):
-        print(f"Ombi configuration not found or incomplete. Skipping Ombi integration for {collection_name}.")
-        return
+# def add_to_ombi(missing_titles, collection_name, config):
+#     """Add missing titles to Ombi for requesting."""
+#     OMBI_URL = config.get('OMBI', 'OMBI_URL')
+#     OMBI_API_KEY = config.get('OMBI', 'OMBI_API_KEY')
+#
+#     print(f"Adding missing titles from {collection_name} to Ombi:")
+#
+#     headers = {
+#         'ApiKey': OMBI_API_KEY,
+#         'Content-Type': 'application/json',
+#         'Accept': 'application/json'
+#     }
+#
+#     timeout = 30
+#
+#     for title in missing_titles:
+#         try:
+#             search_url = f"{OMBI_URL}/api/v1/Search/multi/{title}"
+#             search_response = requests.get(search_url, headers=headers, timeout=timeout)
+#
+#             if search_response.status_code == 200:
+#                 search_results = search_response.json()
+#                 if search_results:
+#                     media_result = next((item for item in search_results if item['type'] in ['movie', 'tv']), None)
+#
+#                     if media_result:
+#                         media_type = media_result['type']
+#                         if media_type == 'movie':
+#                             request_url = f"{OMBI_URL}/api/v1/Request/movie"
+#                             request_data = {
+#                                 'theMovieDbId': media_result['id'],
+#                                 'languageCode': 'en'
+#                             }
+#                         else:  # TV show
+#                             request_url = f"{OMBI_URL}/api/v1/Request/tv"
+#                             request_data = {
+#                                 'tvDbId': media_result['id'],
+#                                 'requestAll': True,
+#                                 'languageCode': 'en'
+#                             }
+#
+#                         request_response = requests.post(request_url, headers=headers, json=request_data, timeout=timeout)
+#
+#                         if request_response.status_code == 200:
+#                             print(f"  - Successfully added to Ombi: {title}")
+#                         else:
+#                             print(f"  - Failed to add to Ombi: {title}. Status code: {request_response.status_code}")
+#                     else:
+#                         print(f"  - Could not find matching media type for: {title}")
+#                 else:
+#                     print(f"  - Could not find in Ombi database: {title}")
+#             else:
+#                 print(f"  - Failed to search in Ombi: {title}. Status code: {search_response.status_code}")
+#         except Timeout:
+#             print(f"  - Timeout occurred while processing: {title}. The request took longer than {timeout} seconds to complete.")
+#         except RequestException as e:
+#             print(f"  - An error occurred while processing: {title}. Error: {str(e)}")
+#
+#         time.sleep(1)  # Add a small delay between requests
+#
+#     print(f"Finished processing Ombi additions for {collection_name}.")
 
-    if not OMBI_URL or not OMBI_API_KEY:
-        print(f"Ombi URL or API key is empty. Skipping Ombi integration for {collection_name}.")
-        return
+def add_to_ombi(missing_titles, collection_name, config):
+    """Add missing titles to Ombi for requesting."""
+    OMBI_URL = config.get('OMBI', 'OMBI_URL')
+    OMBI_API_KEY = config.get('OMBI', 'OMBI_API_KEY')
+
+    print(f"Adding missing titles from {collection_name} to Ombi:")
 
     headers = {
         'ApiKey': OMBI_API_KEY,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
     }
 
     timeout = 30
 
-    if missing_titles:
-        print(f"Adding missing titles from {collection_name} to Ombi:")
-        for title in missing_titles:
-            try:
-                search_url = f"{OMBI_URL}/api/v1/Search/multi/{title}"
-                search_response = requests.get(search_url, headers=headers, timeout=timeout)
+    for title in missing_titles:
+        try:
+            # Determine if it's a movie or TV show and choose the correct API endpoint
+            if 'movie' in collection_name.lower():
+                search_url = f"{OMBI_URL}/api/v1/Search/movie/{title}"
+            else:
+                search_url = f"{OMBI_URL}/api/v1/Search/tv/{title}"
 
-                if search_response.status_code == 200:
-                    search_results = search_response.json()
-                    if search_results:
-                        media_result = next((item for item in search_results if item['type'] in ['movie', 'tv']), None)
+            search_response = requests.get(search_url, headers=headers, timeout=timeout)
 
-                        if media_result:
-                            media_type = media_result['type']
-                            if media_type == 'movie':
-                                request_url = f"{OMBI_URL}/api/v1/Request/movie"
-                                request_data = {
-                                    'theMovieDbId': media_result['id'],
-                                    'languageCode': 'en'
-                                }
-                            else:  # TV show
-                                request_url = f"{OMBI_URL}/api/v1/Request/tv"
-                                request_data = {
-                                    'tvDbId': media_result['id'],
-                                    'requestAll': True,
-                                    'languageCode': 'en'
-                                }
+            if search_response.status_code == 200:
+                search_results = search_response.json()
+                if search_results:
+                    media_result = search_results[0]  # Get the first result
+                    media_type = 'movie' if 'movie' in collection_name.lower() else 'tv'
 
-                            request_response = requests.post(request_url, headers=headers, json=request_data, timeout=timeout)
-
-                            if request_response.status_code == 200:
-                                print(f"  - Successfully added to Ombi: {title}")
-                            else:
-                                print(f"  - Failed to add to Ombi: {title}. Status code: {request_response.status_code}")
-                        else:
-                            print(f"  - Could not find matching media type for: {title}")
+                    # Prepare request data based on media type
+                    if media_type == 'movie':
+                        request_url = f"{OMBI_URL}/api/v1/Request/movie"
+                        request_data = {
+                            'theMovieDbId': media_result['theMovieDbId'],
+                            'languageCode': 'en'
+                        }
                     else:
-                        print(f"  - Could not find in Ombi database: {title}")
+                        request_url = f"{OMBI_URL}/api/v1/Request/tv"
+                        request_data = {
+                            'tvDbId': media_result['theTvDbId'],
+                            'requestAll': True,
+                            'languageCode': 'en'
+                        }
+
+                    # Send request to Ombi
+                    request_response = requests.post(request_url, headers=headers, json=request_data, timeout=timeout)
+
+                    if request_response.status_code == 200:
+                        print(f"  - Successfully added to Ombi: {title}")
+                    else:
+                        print(f"  - Failed to add to Ombi: {title}. Status code: {request_response.status_code}")
                 else:
-                    print(f"  - Failed to search in Ombi: {title}. Status code: {search_response.status_code}")
-            except Timeout:
-                print(f"  - Timeout occurred while processing: {title}. The request took longer than {timeout} seconds to complete.")
-            except RequestException as e:
-                print(f"  - An error occurred while processing: {title}. Error: {str(e)}")
+                    print(f"  - Could not find in Ombi database: {title}")
+            else:
+                print(f"  - Failed to search in Ombi: {title}. Status code: {search_response.status_code}")
+        except Timeout:
+            print(f"  - Timeout occurred while processing: {title}. The request took longer than {timeout} seconds to complete.")
+        except RequestException as e:
+            print(f"  - An error occurred while processing: {title}. Error: {str(e)}")
 
-            time.sleep(1)  # Add a small delay between requests
+        time.sleep(1)  # Add a small delay between requests
 
-        print(f"Finished processing Ombi additions for {collection_name}.")
-    else:
-        print(f"No missing titles to add to Ombi for {collection_name}.")
+    print(f"Finished processing Ombi additions for {collection_name}.")
 
 def main():
     start_time = time.time()
@@ -283,6 +347,12 @@ def main():
         print("Error: PLEX_URL and/or PLEX_TOKEN not found in configuration file.")
         return
 
+    ombi_enabled = check_ombi_credentials(config)
+    if ombi_enabled:
+        print("Ombi credentials found. Ombi integration will be used.")
+    else:
+        print("Ombi credentials not found or incomplete. Ombi integration will be skipped.")
+
     try:
         plex = PlexServer(PLEX_URL, PLEX_TOKEN)
     except Exception as e:
@@ -290,10 +360,10 @@ def main():
         return
 
     watched_titles = get_watched_titles(plex)
-    favorites, ratings = get_user_preferences(plex)
+    ratings = get_user_preferences(plex)
 
-    if not watched_titles and not favorites and not ratings:
-        print("No watched titles, favorites, or ratings found in your Plex library.")
+    if not watched_titles and not ratings:
+        print("No watched titles or ratings found in your Plex library.")
         return
 
     updated_collections = []
@@ -305,9 +375,6 @@ def main():
 
         {', '.join(watched_titles)}
 
-        My favorite titles are:
-        {', '.join(favorites)}
-
         I have rated the following titles (out of 10):
         {', '.join([f"{title} ({rating})" for title, rating in ratings.items()])}
 
@@ -317,7 +384,7 @@ def main():
           "title": "Title of the {media_type.lower()}",
           "genre": "Genre(s)",
           "description": "A brief description",
-          "reason": "A brief explanation of why this is recommended based on my preferences"
+          "reason": "A brief explanation of why this is recommended based on my watch history and ratings"
         }}
 
         Please provide the entire response as a JSON array of objects.
@@ -336,7 +403,11 @@ def main():
                 recommendations_df = pd.DataFrame(valid_recommendations)
                 collection_name = f'AI Recommended {media_type}s'
                 missing_titles = create_collection_with_recommendations(plex, recommendations_df, media_type, collection_name)
-                add_to_ombi(missing_titles, collection_name)
+                if ombi_enabled:
+                    add_to_ombi(missing_titles, collection_name, config)
+                else:
+                    print(f"Skipping Ombi integration for {collection_name} (Ombi credentials not set).")
+
                 output_file = f'/output/{media_type.lower()}_recommendations.csv'
                 recommendations_df.to_csv(output_file, index=False)
                 print(f"\n{media_type} recommendations saved to '{output_file}'.")
@@ -390,7 +461,10 @@ def main():
             if valid_recommendations:
                 recommendations_df = pd.DataFrame(valid_recommendations)
                 missing_titles = create_collection_with_recommendations(plex, recommendations_df, "Movie", collection_name)
-                add_to_ombi(missing_titles, collection_name)
+                if ombi_enabled:
+                    add_to_ombi(missing_titles, collection_name, config)
+                else:
+                    print(f"Skipping Ombi integration for {collection_name} (Ombi credentials not set).")
                 output_file = f'/output/{collection_name.lower().replace(" ", "_")}_recommendations.csv'
                 recommendations_df.to_csv(output_file, index=False)
                 print(f"\n{collection_name} recommendations saved to '{output_file}'.")
@@ -403,6 +477,9 @@ def main():
     print("\nUpdated collections:")
     for collection in updated_collections:
         print(f"- {collection}")
+
+    end_time = time.time()
+    print(f"\nTotal execution time: {end_time - start_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()
