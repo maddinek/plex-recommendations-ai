@@ -1,0 +1,13 @@
+version: '3'
+services:
+  plex-recommendations:
+    build: .
+    container_name: plex-recommendations
+    volumes:
+      - ./config:/config
+      - ./output:/output
+    environment:
+      - CONFIG_FILE=/config/plex_recommendations.ini
+      - PYTHONUNBUFFERED=1
+    command: python /app/plex-recommendations.py
+
