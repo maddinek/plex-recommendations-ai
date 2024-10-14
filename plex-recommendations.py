@@ -193,7 +193,8 @@ def create_collection_with_recommendations(plex, recommendations_df, media_type,
 
         # Feature the collection on the home screen
         try:
-            collection.edit(**{"smart": 0, "promote": 1})
+            # collection.edit(**{"smart": 0, "promote": 1})
+            collection.editPromote(promote=True)
             print(f"Collection '{collection_name}' featured on the home screen.")
         except Exception as e:
             print(f"Error featuring collection on home screen: {e}")
@@ -494,7 +495,7 @@ def main():
 
         {', '.join(watched_titles)}
 
-        I have rated the following titles (out of 10):
+        I have rated the following titles (out of {NUMBER_OF_RECOMMENDATIONS}):
         {', '.join([f"{title} ({rating})" for title, rating in ratings.items()])}
 
         Based on this information, recommend {NUMBER_OF_RECOMMENDATIONS} new {media_type.lower()}s that I might like. For each recommendation, provide the following in JSON format:
@@ -539,25 +540,28 @@ def main():
     # Additional collections for Movies and TV Shows
     additional_collections = {
         'Movie': [
-            ("Seasonal", f"Recommend 10 movies suitable for {get_current_season()} season."),
-            ("Holiday", f"Recommend 10 movies suitable for {get_upcoming_holiday() or 'the upcoming holiday season'}."),
-            ("Romantic Comedy", "Recommend 10 top romantic comedy movies."),
-            ("Action Adventure", "Recommend 10 exciting action-adventure movies."),
-            ("Family Friendly", "Recommend 10 family-friendly movies suitable for all ages."),
-            ("Sci-Fi Spectacle", "Recommend 10 mind-bending science fiction movies."),
-            ("Classic Cinema", "Recommend 10 classic movies from various decades that have stood the test of time."),
-            ("Based on True Story", "Recommend 10 compelling movies based on true stories or real events."),
-            ("90s & 00s Teenage Movies", "Recommend 10 iconic teenage movies from the 1990s and 2000s."),
-            ("Very Sarcastic Movies", "Recommend 10 highly sarcastic or satirical movies, similar in tone to 'Baby Mama (2008)' or 'They Came Together (2014)'.")
+            ("Seasonal", f"Recommend {NUMBER_OF_RECOMMENDATIONS} movies suitable for {get_current_season()} season."),
+            ("Holiday", f"Recommend {NUMBER_OF_RECOMMENDATIONS} movies suitable for {get_upcoming_holiday() or 'the upcoming holiday season'}."),
+            ("Romantic Comedy", "Recommend {NUMBER_OF_RECOMMENDATIONS} top romantic comedy movies."),
+            ("Action Adventure", "Recommend {NUMBER_OF_RECOMMENDATIONS} exciting action-adventure movies."),
+            ("Family Friendly", "Recommend {NUMBER_OF_RECOMMENDATIONS} family-friendly movies suitable for all ages."),
+            ("Sci-Fi Spectacle", "Recommend {NUMBER_OF_RECOMMENDATIONS} mind-bending science fiction movies."),
+            ("Classic Cinema", "Recommend {NUMBER_OF_RECOMMENDATIONS} classic movies from various decades that have stood the test of time."),
+            ("Based on True Story", "Recommend {NUMBER_OF_RECOMMENDATIONS} compelling movies based on true stories or real events."),
+            ("90s & 00s Teenage Movies", "Recommend {NUMBER_OF_RECOMMENDATIONS} iconic teenage movies from the 1990s and 2000s."),
+            ("Very Sarcastic Movies", "Recommend {NUMBER_OF_RECOMMENDATIONS} highly sarcastic or satirical movies, similar in tone to 'Baby Mama (2008)' or 'They Came Together (2014)'.")
         ],
         'TV Show': [
-            ("Seasonal", f"Recommend 10 TV shows suitable for {get_current_season()} season."),
-            ("Holiday", f"Recommend 10 TV shows suitable for {get_upcoming_holiday() or 'the upcoming holiday season'}."),
-            ("Romantic Comedy", "Recommend 10 top romantic comedy TV shows."),
-            ("Family Friendly", "Recommend 10 family-friendly TV shows suitable for all ages."),
-            ("Sci-Fi Spectacle", "Recommend 10 mind-bending science fiction TV shows."),
-            ("Classic TV Shows", "Recommend 10 classic TV shows from various decades that have stood the test of time."),
-            ("Based on True Story", "Recommend 10 compelling TV shows based on true stories or real events.")
+            ("Seasonal", f"Recommend {NUMBER_OF_RECOMMENDATIONS} TV shows suitable for {get_current_season()} season."),
+            ("Holiday", f"Recommend {NUMBER_OF_RECOMMENDATIONS} TV shows suitable for {get_upcoming_holiday() or 'the upcoming holiday season'}."),
+            ("Romantic Comedy", "Recommend {NUMBER_OF_RECOMMENDATIONS} top romantic comedy TV shows."),
+            ("Family Friendly", "Recommend {NUMBER_OF_RECOMMENDATIONS} family-friendly TV shows suitable for all ages."),
+            ("Sci-Fi Spectacle", "Recommend {NUMBER_OF_RECOMMENDATIONS} mind-bending science fiction TV shows."),
+            ("Classic TV Shows", "Recommend {NUMBER_OF_RECOMMENDATIONS} classic TV shows from various decades that have stood the test of time."),
+            ("Based on True Story", "Recommend {NUMBER_OF_RECOMMENDATIONS} compelling TV shows based on true stories or real events."),
+            ("Home Renovations", "Recommend {NUMBER_OF_RECOMMENDATIONS} top TV shows about home renovations, such as 'Fixer Upper' and similar."),
+            ("Nature Documentaries", "Recommend {NUMBER_OF_RECOMMENDATIONS} nature documentaries, especially BBC ones."),
+            ("Educational Documentaries", "Recommend {NUMBER_OF_RECOMMENDATIONS} high-quality documentaries, particularly about food, education, neuro science and other informative/educative topics, including BBC and others.")
         ]
     }
 
@@ -612,9 +616,6 @@ def main():
 
     end_time = time.time()
     print(f"\nTotal execution time: {end_time - start_time:.2f} seconds")
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
