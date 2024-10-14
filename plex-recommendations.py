@@ -454,6 +454,7 @@ def main():
     config, config_file = read_config()
     PLEX_URL = config.get('PLEX', 'PLEX_URL')
     PLEX_TOKEN = config.get('PLEX', 'PLEX_TOKEN')
+    NUMBER_OF_RECOMMENDATIONS = config.getint('RECOMMENDATIONS', 'NUMBER_OF_RECOMMENDATIONS', fallback=10)
 
     if not PLEX_URL or not PLEX_TOKEN:
         print("Error: PLEX_URL and/or PLEX_TOKEN not found in configuration file.")
@@ -496,7 +497,7 @@ def main():
         I have rated the following titles (out of 10):
         {', '.join([f"{title} ({rating})" for title, rating in ratings.items()])}
 
-        Based on this information, recommend 10 new {media_type.lower()}s that I might like. For each recommendation, provide the following in JSON format:
+        Based on this information, recommend {NUMBER_OF_RECOMMENDATIONS} new {media_type.lower()}s that I might like. For each recommendation, provide the following in JSON format:
 
         {{
           "title": "Title of the {media_type.lower()}",
