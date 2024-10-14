@@ -18,7 +18,7 @@ def read_config(config_file=None):
         config_file = os.environ.get('CONFIG_FILE', 'plex_recommendations.ini')
     config = configparser.ConfigParser()
     config.read(config_file)
-    return config
+    return config, config_file
 
 def check_ombi_credentials(config):
     """Check if Ombi credentials are set in the config."""
@@ -58,7 +58,8 @@ def get_user_preferences(plex):
             ratings[movie.title] = movie.userRating
 
     # Get ratings from TV Shows
-    for show in plex.library.section('TV Shows').all():
+    tv_shows = plex.library.section('TV Shows').all()  # This line was missing, so now it's added
+    for show in tv_shows:
         if hasattr(show, 'userRating') and show.userRating is not None:
             ratings[show.title] = show.userRating
 
@@ -67,7 +68,7 @@ def get_user_preferences(plex):
 
 def get_recommendations(prompt, media_type):
     """Get recommendations from GPT-4o mini API."""
-    config = read_config()
+    config, _ = read_config()
     API_KEY = config.get('GPT', 'GPT4O_API_KEY')
 
     if not API_KEY:
@@ -188,7 +189,7 @@ def create_collection_with_recommendations(plex, recommendations_df, media_type,
         for _, row in recommendations_df.iterrows():
             if row['title'] in [item.title for item in plex_items]:
                 summary += f"- {row['title']}: {row['reason']}\n"
-        collection.edit(summary=summary)
+        collection.editSummary(summary)
 
         # Feature the collection on the home screen
         try:
@@ -208,68 +209,6 @@ def create_collection_with_recommendations(plex, recommendations_df, media_type,
 
     return missing_titles
 
-# def add_to_ombi(missing_titles, collection_name, config):
-#     """Add missing titles to Ombi for requesting."""
-#     OMBI_URL = config.get('OMBI', 'OMBI_URL')
-#     OMBI_API_KEY = config.get('OMBI', 'OMBI_API_KEY')
-#
-#     print(f"Adding missing titles from {collection_name} to Ombi:")
-#
-#     headers = {
-#         'ApiKey': OMBI_API_KEY,
-#         'Content-Type': 'application/json',
-#         'Accept': 'application/json'
-#     }
-#
-#     timeout = 30
-#
-#     for title in missing_titles:
-#         try:
-#             search_url = f"{OMBI_URL}/api/v1/Search/multi/{title}"
-#             search_response = requests.get(search_url, headers=headers, timeout=timeout)
-#
-#             if search_response.status_code == 200:
-#                 search_results = search_response.json()
-#                 if search_results:
-#                     media_result = next((item for item in search_results if item['type'] in ['movie', 'tv']), None)
-#
-#                     if media_result:
-#                         media_type = media_result['type']
-#                         if media_type == 'movie':
-#                             request_url = f"{OMBI_URL}/api/v1/Request/movie"
-#                             request_data = {
-#                                 'theMovieDbId': media_result['id'],
-#                                 'languageCode': 'en'
-#                             }
-#                         else:  # TV show
-#                             request_url = f"{OMBI_URL}/api/v1/Request/tv"
-#                             request_data = {
-#                                 'tvDbId': media_result['id'],
-#                                 'requestAll': True,
-#                                 'languageCode': 'en'
-#                             }
-#
-#                         request_response = requests.post(request_url, headers=headers, json=request_data, timeout=timeout)
-#
-#                         if request_response.status_code == 200:
-#                             print(f"  - Successfully added to Ombi: {title}")
-#                         else:
-#                             print(f"  - Failed to add to Ombi: {title}. Status code: {request_response.status_code}")
-#                     else:
-#                         print(f"  - Could not find matching media type for: {title}")
-#                 else:
-#                     print(f"  - Could not find in Ombi database: {title}")
-#             else:
-#                 print(f"  - Failed to search in Ombi: {title}. Status code: {search_response.status_code}")
-#         except Timeout:
-#             print(f"  - Timeout occurred while processing: {title}. The request took longer than {timeout} seconds to complete.")
-#         except RequestException as e:
-#             print(f"  - An error occurred while processing: {title}. Error: {str(e)}")
-#
-#         time.sleep(1)  # Add a small delay between requests
-#
-#     print(f"Finished processing Ombi additions for {collection_name}.")
-
 def add_to_ombi(missing_titles, collection_name, config):
     """Add missing titles to Ombi for requesting."""
     OMBI_URL = config.get('OMBI', 'OMBI_URL')
@@ -287,7 +226,6 @@ def add_to_ombi(missing_titles, collection_name, config):
 
     for title in missing_titles:
         try:
-            # Determine if it's a movie or TV show and choose the correct API endpoint
             if 'movie' in collection_name.lower():
                 search_url = f"{OMBI_URL}/api/v1/Search/movie/{title}"
             else:
@@ -298,10 +236,9 @@ def add_to_ombi(missing_titles, collection_name, config):
             if search_response.status_code == 200:
                 search_results = search_response.json()
                 if search_results:
-                    media_result = search_results[0]  # Get the first result
+                    media_result = search_results[0]
                     media_type = 'movie' if 'movie' in collection_name.lower() else 'tv'
 
-                    # Prepare request data based on media type
                     if media_type == 'movie':
                         request_url = f"{OMBI_URL}/api/v1/Request/movie"
                         request_data = {
@@ -316,7 +253,6 @@ def add_to_ombi(missing_titles, collection_name, config):
                             'languageCode': 'en'
                         }
 
-                    # Send request to Ombi
                     request_response = requests.post(request_url, headers=headers, json=request_data, timeout=timeout)
 
                     if request_response.status_code == 200:
@@ -336,12 +272,189 @@ def add_to_ombi(missing_titles, collection_name, config):
 
     print(f"Finished processing Ombi additions for {collection_name}.")
 
+# Trakt functionality starts here
+def request_device_code(client_id):
+    """Request a device code from Trakt."""
+    url = "https://api.trakt.tv/oauth/device/code"
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        'client_id': client_id
+    }
+
+    response = requests.post(url, headers=headers, json=payload)
+
+    if response.status_code == 200:
+        return response.json()  # Contains device_code, user_code, verification_url, expires_in, interval
+    else:
+        raise Exception(f"Failed to request device code: {response.status_code}, {response.text}")
+
+def poll_for_access_token(device_code, client_id, client_secret, interval):
+    """Poll for the access token using the device code."""
+    url = "https://api.trakt.tv/oauth/device/token"
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        'code': device_code,
+        'client_id': client_id,
+        'client_secret': client_secret
+    }
+
+    while True:
+        response = requests.post(url, headers=headers, json=payload)
+
+        if response.status_code == 200:
+            return response.json()  # Contains access_token, refresh_token, expires_in
+        elif response.status_code == 400:
+            print("Authorization pending...")
+        elif response.status_code == 404:
+            print("Invalid device code.")
+            break
+        elif response.status_code == 409:
+            print("Device code already used.")
+            break
+        elif response.status_code == 410:
+            print("Device code expired.")
+            break
+        elif response.status_code == 418:
+            print("Authorization denied.")
+            break
+
+        time.sleep(interval)  # Wait for the specified interval before polling again
+
+def get_trakt_access_token(config, config_file):
+    """Get or refresh Trakt access token using the Device Flow."""
+    client_id = config.get('TRAKT', 'CLIENT_ID')
+    client_secret = config.get('TRAKT', 'CLIENT_SECRET')
+    access_token = config.get('TRAKT', 'ACCESS_TOKEN', fallback=None)
+    refresh_token = config.get('TRAKT', 'REFRESH_TOKEN', fallback=None)
+    token_expiry_str = config.get('TRAKT', 'TOKEN_EXPIRY', fallback='0')
+
+    try:
+        token_expiry = int(token_expiry_str)
+    except ValueError:
+        token_expiry = 0
+
+    if access_token and int(time.time()) < token_expiry:
+        return access_token
+
+    if refresh_token:
+        # Try to refresh the token
+        token_url = "https://api.trakt.tv/oauth/token"
+        data = {
+            'refresh_token': refresh_token,
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'grant_type': 'refresh_token'
+        }
+        response = requests.post(token_url, json=data)
+
+        if response.status_code == 200:
+            token_data = response.json()
+            access_token = token_data['access_token']
+            refresh_token = token_data['refresh_token']
+            expires_in = token_data['expires_in']
+
+            config.set('TRAKT', 'ACCESS_TOKEN', access_token)
+            config.set('TRAKT', 'REFRESH_TOKEN', refresh_token)
+            config.set('TRAKT', 'TOKEN_EXPIRY', str(int(time.time()) + expires_in))
+
+            # Writing back to the config file
+            with open(config_file, 'w') as configfile:
+                config.write(configfile)
+
+            return access_token
+
+    # Use Device Flow if no tokens are present
+    device_data = request_device_code(client_id)
+
+    print(f"Go to {device_data['verification_url']} and enter the code: {device_data['user_code']}")
+
+    # Poll for the access token
+    token_data = poll_for_access_token(
+        device_data['device_code'],
+        client_id,
+        client_secret,
+        device_data['interval']
+    )
+
+    if token_data:
+        access_token = token_data['access_token']
+        refresh_token = token_data['refresh_token']
+        expires_in = token_data['expires_in']
+
+        # Save tokens in the config file
+        config.set('TRAKT', 'ACCESS_TOKEN', access_token)
+        config.set('TRAKT', 'REFRESH_TOKEN', refresh_token)
+        config.set('TRAKT', 'TOKEN_EXPIRY', str(int(time.time()) + expires_in))
+
+        # Writing back to the config file
+        with open(config_file, 'w') as configfile:
+            config.write(configfile)
+
+        return access_token
+    else:
+        print("Failed to obtain access token.")
+        return None
+
+def check_trakt_credentials(config, config_file):
+    """Check if Trakt credentials are set in the config and obtain/refresh access token if needed."""
+    try:
+        client_id = config.get('TRAKT', 'CLIENT_ID')
+        client_secret = config.get('TRAKT', 'CLIENT_SECRET')
+
+        if not client_id or not client_secret:
+            print("Trakt CLIENT_ID or CLIENT_SECRET is missing in the configuration file.")
+            return False
+
+        access_token = get_trakt_access_token(config, config_file)
+        return bool(access_token)
+    except (configparser.NoSectionError, configparser.NoOptionError) as e:
+        print(f"Error in Trakt configuration: {e}")
+        return False
+
+def add_to_trakt(missing_titles, collection_name, config):
+    """Add missing titles to a Trakt collection."""
+    trakt_url = "https://api.trakt.tv/sync/collection"
+    access_token = config.get('TRAKT', 'ACCESS_TOKEN')
+
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+        'trakt-api-version': '2',
+        'trakt-api-key': config.get('TRAKT', 'CLIENT_ID')
+    }
+
+    print(f"Adding missing titles from {collection_name} to Trakt:")
+
+    for title in missing_titles:
+        # Construct data for each movie or show
+        media_data = {
+            "movies": [{"title": title}] if 'movie' in collection_name.lower() else None,
+            "shows": [{"title": title}] if 'tv' in collection_name.lower() else None
+        }
+
+        # Remove empty entries
+        media_data = {k: v for k, v in media_data.items() if v is not None}
+
+        try:
+            response = requests.post(trakt_url, headers=headers, json=media_data)
+            if response.status_code == 201:
+                print(f"  - Successfully added to Trakt: {title}")
+            else:
+                print(f"  - Failed to add to Trakt: {title}. Status code: {response.status_code}")
+        except RequestException as e:
+            print(f"  - An error occurred while processing: {title}. Error: {str(e)}")
+
+        time.sleep(1)  # Add a small delay between requests
+
+    print(f"Finished processing Trakt additions for {collection_name}.")
+
 def main():
     start_time = time.time()
 
-    config = read_config()
+    config, config_file = read_config()
     PLEX_URL = config.get('PLEX', 'PLEX_URL')
     PLEX_TOKEN = config.get('PLEX', 'PLEX_TOKEN')
+    NUMBER_OF_RECOMMENDATIONS = config.getint('RECOMMENDATIONS', 'NUMBER_OF_RECOMMENDATIONS', fallback=10)
 
     if not PLEX_URL or not PLEX_TOKEN:
         print("Error: PLEX_URL and/or PLEX_TOKEN not found in configuration file.")
@@ -352,6 +465,12 @@ def main():
         print("Ombi credentials found. Ombi integration will be used.")
     else:
         print("Ombi credentials not found or incomplete. Ombi integration will be skipped.")
+
+    trakt_enabled = check_trakt_credentials(config, config_file)  # Pass config_file here
+    if trakt_enabled:
+        print("Trakt credentials found. Trakt integration will be used.")
+    else:
+        print("Trakt credentials not found or incomplete. Trakt integration will be skipped.")
 
     try:
         plex = PlexServer(PLEX_URL, PLEX_TOKEN)
@@ -378,7 +497,7 @@ def main():
         I have rated the following titles (out of 10):
         {', '.join([f"{title} ({rating})" for title, rating in ratings.items()])}
 
-        Based on this information, recommend 10 new {media_type.lower()}s that I might like. For each recommendation, provide the following in JSON format:
+        Based on this information, recommend {NUMBER_OF_RECOMMENDATIONS} new {media_type.lower()}s that I might like. For each recommendation, provide the following in JSON format:
 
         {{
           "title": "Title of the {media_type.lower()}",
@@ -405,8 +524,8 @@ def main():
                 missing_titles = create_collection_with_recommendations(plex, recommendations_df, media_type, collection_name)
                 if ombi_enabled:
                     add_to_ombi(missing_titles, collection_name, config)
-                else:
-                    print(f"Skipping Ombi integration for {collection_name} (Ombi credentials not set).")
+                if trakt_enabled:
+                    add_to_trakt(missing_titles, collection_name, config)
 
                 output_file = f'/output/{media_type.lower()}_recommendations.csv'
                 recommendations_df.to_csv(output_file, index=False)
@@ -461,10 +580,11 @@ def main():
             if valid_recommendations:
                 recommendations_df = pd.DataFrame(valid_recommendations)
                 missing_titles = create_collection_with_recommendations(plex, recommendations_df, "Movie", collection_name)
+                if trakt_enabled:
+                    add_to_trakt(missing_titles, collection_name, config)
                 if ombi_enabled:
                     add_to_ombi(missing_titles, collection_name, config)
-                else:
-                    print(f"Skipping Ombi integration for {collection_name} (Ombi credentials not set).")
+
                 output_file = f'/output/{collection_name.lower().replace(" ", "_")}_recommendations.csv'
                 recommendations_df.to_csv(output_file, index=False)
                 print(f"\n{collection_name} recommendations saved to '{output_file}'.")
