@@ -189,7 +189,7 @@ def create_collection_with_recommendations(plex, recommendations_df, media_type,
         for _, row in recommendations_df.iterrows():
             if row['title'] in [item.title for item in plex_items]:
                 summary += f"- {row['title']}: {row['reason']}\n"
-        collection.edit(summary=summary)
+        collection.editSummary(summary)
 
         # Feature the collection on the home screen
         try:
