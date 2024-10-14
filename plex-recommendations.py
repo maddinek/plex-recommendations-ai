@@ -8,7 +8,6 @@ import time
 import configparser
 from datetime import datetime
 from requests.exceptions import RequestException, Timeout
-import webbrowser
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
@@ -21,6 +20,259 @@ def read_config(config_file=None):
     config.read(config_file)
     return config, config_file
 
+def check_ombi_credentials(config):
+    """Check if Ombi credentials are set in the config."""
+    try:
+        ombi_url = config.get('OMBI', 'OMBI_URL')
+        ombi_api_key = config.get('OMBI', 'OMBI_API_KEY')
+        return bool(ombi_url and ombi_api_key)
+    except (configparser.NoSectionError, configparser.NoOptionError):
+        return False
+
+def get_watched_titles(plex):
+    """Retrieve watched movies and TV shows from Plex."""
+    print("Retrieving watched movies and TV shows from Plex...")
+    watched_titles = []
+
+    movies = plex.library.section('Movies').all()
+    watched_titles.extend([movie.title for movie in movies if movie.isPlayed])
+
+    tv_shows = plex.library.section('TV Shows').all()
+    for show in tv_shows:
+        if show.isWatched or any(episode.isPlayed for episode in show.episodes()):
+            watched_titles.append(show.title)
+
+    watched_titles = list(set(watched_titles))
+    print(f"Total watched titles retrieved: {len(watched_titles)}")
+    return watched_titles
+
+def get_user_preferences(plex):
+    """Retrieve user's ratings for movies and TV shows from Plex."""
+    ratings = {}
+
+    print("Retrieving user ratings from Plex...")
+
+    # Get ratings from Movies
+    for movie in plex.library.section('Movies').all():
+        if hasattr(movie, 'userRating') and movie.userRating is not None:
+            ratings[movie.title] = movie.userRating
+
+    # Get ratings from TV Shows
+    tv_shows = plex.library.section('TV Shows').all()  # This line was missing, so now it's added
+    for show in tv_shows:
+        if hasattr(show, 'userRating') and show.userRating is not None:
+            ratings[show.title] = show.userRating
+
+    print(f"Found {len(ratings)} rated titles.")
+    return ratings
+
+def get_recommendations(prompt, media_type):
+    """Get recommendations from GPT-4o mini API."""
+    config, _ = read_config()
+    API_KEY = config.get('GPT', 'GPT4O_API_KEY')
+
+    if not API_KEY:
+        raise Exception("GPT4O_API_KEY not found in configuration file.")
+
+    url = 'https://api.openai.com/v1/chat/completions'
+
+    headers = {
+        'Authorization': f'Bearer {API_KEY}',
+        'Content-Type': 'application/json',
+    }
+
+    data = {
+        'model': 'gpt-4o-mini',
+        'messages': [
+            {"role": "system", "content": f"You are a recommendation system for {media_type}s."},
+            {"role": "user", "content": prompt}
+        ],
+        'max_tokens': 10000,
+        'temperature': 0.7,
+        'n': 1,
+    }
+
+    response = requests.post(url, headers=headers, json=data)
+
+    if response.status_code != 200:
+        raise Exception(f"API request failed with status {response.status_code}: {response.text}")
+
+    return response.json()
+
+def parse_recommendations(response_text):
+    """Parse the API response and extract recommendations."""
+    try:
+        recommendations = json.loads(response_text)
+        return recommendations
+    except json.JSONDecodeError:
+        json_start = response_text.find('[')
+        json_end = response_text.rfind(']')
+        if json_start != -1 and json_end != -1:
+            try:
+                recommendations = json.loads(response_text[json_start:json_end+1])
+                return recommendations
+            except json.JSONDecodeError:
+                pass
+        raise Exception("Failed to parse the response as JSON.")
+
+def get_current_season():
+    """Determine the current season based on the current month."""
+    month = datetime.now().month
+    if 3 <= month <= 5:
+        return "Spring"
+    elif 6 <= month <= 8:
+        return "Summer"
+    elif 9 <= month <= 11:
+        return "Fall"
+    else:
+        return "Winter"
+
+def get_upcoming_holiday():
+    """Determine the upcoming holiday based on the current date."""
+    now = datetime.now()
+    if now.month == 10:
+        return "Halloween"
+    elif now.month == 12:
+        return "Christmas"
+    elif now.month == 11:
+        return "Thanksgiving"
+    elif now.month == 2 and now.day <= 14:
+        return "Valentine's Day"
+    else:
+        return None
+
+def create_collection_with_recommendations(plex, recommendations_df, media_type, collection_name):
+    """Create or update a Plex collection with recommended items and feature it on the home screen."""
+    plex_items = []
+    missing_titles = []
+
+    section = plex.library.section('Movies' if media_type == 'Movie' else 'TV Shows')
+
+    for _, row in recommendations_df.iterrows():
+        title = row['title']
+        try:
+            results = section.search(title)
+            found = False
+            for result in results:
+                if result.title.lower() == title.lower():
+                    plex_items.append(result)
+                    found = True
+                    print(f"Found in Plex: {title}")
+                    result.addLabel(f"AI Recommended - {collection_name}")
+                    print(f"Added 'AI Recommended - {collection_name}' tag to: {title}")
+                    break
+            if not found:
+                missing_titles.append(title)
+                print(f"Not found in Plex: {title}")
+        except NotFound:
+            missing_titles.append(title)
+            print(f"Not found in Plex: {title}")
+            continue
+
+    if plex_items:
+        try:
+            collection = section.collection(collection_name)
+            print(f"Existing collection found: {collection_name}")
+            collection.addItems(plex_items)
+            print(f"Added {len(plex_items)} items to existing collection")
+        except NotFound:
+            try:
+                print(f"Creating new collection: {collection_name}")
+                collection = section.createCollection(title=collection_name, items=plex_items)
+                print(f"Created new collection with {len(plex_items)} items")
+            except BadRequest as e:
+                print(f"Error creating collection: {e}")
+                return missing_titles
+
+        # Update collection summary with reasons
+        summary = "Recommendations based on your watch history, favorites, and ratings:\n\n"
+        for _, row in recommendations_df.iterrows():
+            if row['title'] in [item.title for item in plex_items]:
+                summary += f"- {row['title']}: {row['reason']}\n"
+        collection.edit(summary=summary)
+
+        # Feature the collection on the home screen
+        try:
+            collection.edit(**{"smart": 0, "promote": 1})
+            print(f"Collection '{collection_name}' featured on the home screen.")
+        except Exception as e:
+            print(f"Error featuring collection on home screen: {e}")
+
+        print(f"Collection '{collection_name}' updated with {len(plex_items)} items.")
+    else:
+        print(f"No recommended items found in your Plex library for {collection_name}. Skipping collection creation.")
+
+    if missing_titles:
+        print(f"\nRecommended items not found in your Plex library for {collection_name}:")
+        for title in missing_titles:
+            print(f"- {title}")
+
+    return missing_titles
+
+def add_to_ombi(missing_titles, collection_name, config):
+    """Add missing titles to Ombi for requesting."""
+    OMBI_URL = config.get('OMBI', 'OMBI_URL')
+    OMBI_API_KEY = config.get('OMBI', 'OMBI_API_KEY')
+
+    print(f"Adding missing titles from {collection_name} to Ombi:")
+
+    headers = {
+        'ApiKey': OMBI_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    }
+
+    timeout = 30
+
+    for title in missing_titles:
+        try:
+            if 'movie' in collection_name.lower():
+                search_url = f"{OMBI_URL}/api/v1/Search/movie/{title}"
+            else:
+                search_url = f"{OMBI_URL}/api/v1/Search/tv/{title}"
+
+            search_response = requests.get(search_url, headers=headers, timeout=timeout)
+
+            if search_response.status_code == 200:
+                search_results = search_response.json()
+                if search_results:
+                    media_result = search_results[0]
+                    media_type = 'movie' if 'movie' in collection_name.lower() else 'tv'
+
+                    if media_type == 'movie':
+                        request_url = f"{OMBI_URL}/api/v1/Request/movie"
+                        request_data = {
+                            'theMovieDbId': media_result['theMovieDbId'],
+                            'languageCode': 'en'
+                        }
+                    else:
+                        request_url = f"{OMBI_URL}/api/v1/Request/tv"
+                        request_data = {
+                            'tvDbId': media_result['theTvDbId'],
+                            'requestAll': True,
+                            'languageCode': 'en'
+                        }
+
+                    request_response = requests.post(request_url, headers=headers, json=request_data, timeout=timeout)
+
+                    if request_response.status_code == 200:
+                        print(f"  - Successfully added to Ombi: {title}")
+                    else:
+                        print(f"  - Failed to add to Ombi: {title}. Status code: {request_response.status_code}")
+                else:
+                    print(f"  - Could not find in Ombi database: {title}")
+            else:
+                print(f"  - Failed to search in Ombi: {title}. Status code: {search_response.status_code}")
+        except Timeout:
+            print(f"  - Timeout occurred while processing: {title}. The request took longer than {timeout} seconds to complete.")
+        except RequestException as e:
+            print(f"  - An error occurred while processing: {title}. Error: {str(e)}")
+
+        time.sleep(1)  # Add a small delay between requests
+
+    print(f"Finished processing Ombi additions for {collection_name}.")
+
+# Trakt functionality starts here
 def request_device_code(client_id):
     """Request a device code from Trakt."""
     url = "https://api.trakt.tv/oauth/device/code"
@@ -159,168 +411,6 @@ def check_trakt_credentials(config, config_file):
         print(f"Error in Trakt configuration: {e}")
         return False
 
-def check_ombi_credentials(config):
-    """Check if Ombi credentials are set in the config."""
-    try:
-        ombi_url = config.get('OMBI', 'OMBI_URL')
-        ombi_api_key = config.get('OMBI', 'OMBI_API_KEY')
-        return bool(ombi_url and ombi_api_key)
-    except (configparser.NoSectionError, configparser.NoOptionError):
-        return False
-
-def get_watched_titles(plex):
-    """Retrieve watched movies and TV shows from Plex."""
-    print("Retrieving watched movies and TV shows from Plex...")
-    watched_titles = []
-
-    movies = plex.library.section('Movies').all()
-    watched_titles.extend([movie.title for movie in movies if movie.isPlayed])
-
-    tv_shows = plex.library.section('TV Shows').all()
-    for show in tv_shows:
-        if show.isWatched or any(episode.isPlayed for episode in show.episodes()):
-            watched_titles.append(show.title)
-
-    watched_titles = list(set(watched_titles))
-    print(f"Total watched titles retrieved: {len(watched_titles)}")
-    return watched_titles
-
-def get_user_preferences(plex):
-    """Retrieve user's ratings for movies and TV shows from Plex."""
-    ratings = {}
-
-    print("Retrieving user ratings from Plex...")
-
-    # Get ratings from Movies
-    for movie in plex.library.section('Movies').all():
-        if hasattr(movie, 'userRating') and movie.userRating is not None:
-            ratings[movie.title] = movie.userRating
-
-    # Get ratings from TV Shows
-    for show in plex.library.section('TV Shows').all():
-        if hasattr(show, 'userRating') and show.userRating is not None:
-            ratings[show.title] = show.userRating
-
-    print(f"Found {len(ratings)} rated titles.")
-    return ratings
-
-def get_recommendations(prompt, media_type):
-    """Get recommendations from GPT-4o mini API."""
-    config, _ = read_config()
-    API_KEY = config.get('GPT', 'GPT4O_API_KEY')
-
-    if not API_KEY:
-        raise Exception("GPT4O_API_KEY not found in configuration file.")
-
-    url = 'https://api.openai.com/v1/chat/completions'
-
-    headers = {
-        'Authorization': f'Bearer {API_KEY}',
-        'Content-Type': 'application/json',
-    }
-
-    data = {
-        'model': 'gpt-4o-mini',
-        'messages': [
-            {"role": "system", "content": f"You are a recommendation system for {media_type}s."},
-            {"role": "user", "content": prompt}
-        ],
-        'max_tokens': 10000,
-        'temperature': 0.7,
-        'n': 1,
-    }
-
-    response = requests.post(url, headers=headers, json=data)
-
-    if response.status_code != 200:
-        raise Exception(f"API request failed with status {response.status_code}: {response.text}")
-
-    return response.json()
-
-def parse_recommendations(response_text):
-    """Parse the API response and extract recommendations."""
-    try:
-        recommendations = json.loads(response_text)
-        return recommendations
-    except json.JSONDecodeError:
-        json_start = response_text.find('[')
-        json_end = response_text.rfind(']')
-        if json_start != -1 and json_end != -1:
-            try:
-                recommendations = json.loads(response_text[json_start:json_end+1])
-                return recommendations
-            except json.JSONDecodeError:
-                pass
-        raise Exception("Failed to parse the response as JSON.")
-
-def create_collection_with_recommendations(plex, recommendations_df, media_type, collection_name):
-    """Create or update a Plex collection with recommended items and feature it on the home screen."""
-    plex_items = []
-    missing_titles = []
-
-    section = plex.library.section('Movies' if media_type == 'Movie' else 'TV Shows')
-
-    for _, row in recommendations_df.iterrows():
-        title = row['title']
-        try:
-            results = section.search(title)
-            found = False
-            for result in results:
-                if result.title.lower() == title.lower():
-                    plex_items.append(result)
-                    found = True
-                    print(f"Found in Plex: {title}")
-                    result.addLabel(f"AI Recommended - {collection_name}")
-                    print(f"Added 'AI Recommended - {collection_name}' tag to: {title}")
-                    break
-            if not found:
-                missing_titles.append(title)
-                print(f"Not found in Plex: {title}")
-        except NotFound:
-            missing_titles.append(title)
-            print(f"Not found in Plex: {title}")
-            continue
-
-    if plex_items:
-        try:
-            collection = section.collection(collection_name)
-            print(f"Existing collection found: {collection_name}")
-            collection.addItems(plex_items)
-            print(f"Added {len(plex_items)} items to existing collection")
-        except NotFound:
-            try:
-                print(f"Creating new collection: {collection_name}")
-                collection = section.createCollection(title=collection_name, items=plex_items)
-                print(f"Created new collection with {len(plex_items)} items")
-            except BadRequest as e:
-                print(f"Error creating collection: {e}")
-                return missing_titles
-
-        # Update collection summary with reasons
-        summary = "Recommendations based on your watch history, favorites, and ratings:\n\n"
-        for _, row in recommendations_df.iterrows():
-            if row['title'] in [item.title for item in plex_items]:
-                summary += f"- {row['title']}: {row['reason']}\n"
-        collection.edit(summary=summary)
-
-        # Feature the collection on the home screen
-        try:
-            collection.edit(**{"smart": 0, "promote": 1})
-            print(f"Collection '{collection_name}' featured on the home screen.")
-        except Exception as e:
-            print(f"Error featuring collection on home screen: {e}")
-
-        print(f"Collection '{collection_name}' updated with {len(plex_items)} items.")
-    else:
-        print(f"No recommended items found in your Plex library for {collection_name}. Skipping collection creation.")
-
-    if missing_titles:
-        print(f"\nRecommended items not found in your Plex library for {collection_name}:")
-        for title in missing_titles:
-            print(f"- {title}")
-
-    return missing_titles
-
 def add_to_trakt(missing_titles, collection_name, config):
     """Add missing titles to a Trakt collection."""
     trakt_url = "https://api.trakt.tv/sync/collection"
@@ -360,7 +450,8 @@ def add_to_trakt(missing_titles, collection_name, config):
 
 def main():
     start_time = time.time()
-    config, config_file = read_config()  # Getting both config and config_file
+
+    config, config_file = read_config()
     PLEX_URL = config.get('PLEX', 'PLEX_URL')
     PLEX_TOKEN = config.get('PLEX', 'PLEX_TOKEN')
 
@@ -430,10 +521,10 @@ def main():
                 recommendations_df = pd.DataFrame(valid_recommendations)
                 collection_name = f'AI Recommended {media_type}s'
                 missing_titles = create_collection_with_recommendations(plex, recommendations_df, media_type, collection_name)
+                if ombi_enabled:
+                    add_to_ombi(missing_titles, collection_name, config)
                 if trakt_enabled:
                     add_to_trakt(missing_titles, collection_name, config)
-                else:
-                    print(f"Skipping Trakt integration for {collection_name} (Trakt credentials not set).")
 
                 output_file = f'/output/{media_type.lower()}_recommendations.csv'
                 recommendations_df.to_csv(output_file, index=False)
@@ -443,6 +534,64 @@ def main():
                 print(f"No valid {media_type.lower()} recommendations were found.")
         except Exception as e:
             print(f"An error occurred while processing {media_type.lower()} recommendations: {e}")
+
+    # Additional collections for Movies
+    additional_collections = [
+        ("Seasonal", f"Recommend 10 movies suitable for {get_current_season()} season."),
+        ("Holiday", f"Recommend 10 movies suitable for {get_upcoming_holiday() or 'the upcoming holiday season'}."),
+        ("Romantic Comedy", "Recommend 10 top romantic comedy movies."),
+        ("Action Adventure", "Recommend 10 exciting action-adventure movies."),
+        ("Family Friendly", "Recommend 10 family-friendly movies suitable for all ages."),
+        ("Sci-Fi Spectacle", "Recommend 10 mind-bending science fiction movies."),
+        ("Classic Cinema", "Recommend 10 classic movies from various decades that have stood the test of time."),
+        ("Based on True Story", "Recommend 10 compelling movies based on true stories or real events."),
+        ("90s & 00s Teenage Movies", "Recommend 10 iconic teenage movies from the 1990s and 2000s."),
+        ("Very Sarcastic Movies", "Recommend 10 highly sarcastic or satirical movies, similar in tone to 'Baby Mama (2008)' or 'They Came Together (2014)'.")
+    ]
+
+    for collection_name, recommendation_prompt in additional_collections:
+        prompt = f"""
+        Based on the following criteria:
+
+        {recommendation_prompt}
+
+        For each recommendation, provide the following in JSON format:
+
+        {{
+          "title": "Title of the movie",
+          "genre": "Genre(s)",
+          "description": "A brief description",
+          "reason": "A brief explanation of why this movie fits the criteria"
+        }}
+
+        Please provide the entire response as a JSON array of objects.
+        """
+
+        try:
+            print(f"Requesting recommendations for {collection_name} collection...")
+            response = get_recommendations(prompt, "Movie")
+            recommendations_text = response['choices'][0]['message']['content'].strip()
+            recommendations = parse_recommendations(recommendations_text)
+            valid_recommendations = [
+                rec for rec in recommendations
+                if isinstance(rec, dict) and all(key in rec for key in ('title', 'genre', 'description', 'reason'))
+            ]
+            if valid_recommendations:
+                recommendations_df = pd.DataFrame(valid_recommendations)
+                missing_titles = create_collection_with_recommendations(plex, recommendations_df, "Movie", collection_name)
+                if trakt_enabled:
+                    add_to_trakt(missing_titles, collection_name, config)
+                if ombi_enabled:
+                    add_to_ombi(missing_titles, collection_name, config)
+
+                output_file = f'/output/{collection_name.lower().replace(" ", "_")}_recommendations.csv'
+                recommendations_df.to_csv(output_file, index=False)
+                print(f"\n{collection_name} recommendations saved to '{output_file}'.")
+                updated_collections.append(collection_name)
+            else:
+                print(f"No valid recommendations were found for {collection_name} collection.")
+        except Exception as e:
+            print(f"An error occurred while processing {collection_name} recommendations: {e}")
 
     print("\nUpdated collections:")
     for collection in updated_collections:
