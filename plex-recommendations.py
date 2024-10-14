@@ -487,54 +487,53 @@ def main():
 
     updated_collections = []
 
-    # Standard recommendations for Movies and TV Shows
-    for media_type in ['Movie', 'TV Show']:
-        prompt = f"""
-        I have watched the following movies and TV shows:
+    # Process movie recommendations
+    prompt = f"""
+    I have watched the following movies:
 
-        {', '.join(watched_titles)}
+    {', '.join(watched_titles)}
 
-        I have rated the following titles (out of 10):
-        {', '.join([f"{title} ({rating})" for title, rating in ratings.items()])}
+    I have rated the following movies (out of 10):
+    {', '.join([f"{title} ({rating})" for title, rating in ratings.items()])}
 
-        Based on this information, recommend {NUMBER_OF_RECOMMENDATIONS} new {media_type.lower()}s that I might like. For each recommendation, provide the following in JSON format:
+    Based on this information, recommend {NUMBER_OF_RECOMMENDATIONS} new movies that I might like. For each recommendation, provide the following in JSON format:
 
-        {{
-          "title": "Title of the {media_type.lower()}",
-          "genre": "Genre(s)",
-          "description": "A brief description",
-          "reason": "A brief explanation of why this is recommended based on my watch history and ratings"
-        }}
+    {{
+      "title": "Title of the movie",
+      "genre": "Genre(s)",
+      "description": "A brief description",
+      "reason": "A brief explanation of why this movie fits the criteria"
+    }}
 
-        Please provide the entire response as a JSON array of objects.
-        """
+    Please provide the entire response as a JSON array of objects.
+    """
 
-        try:
-            print(f"Requesting {media_type} recommendations from the GPT-4o mini API...")
-            response = get_recommendations(prompt, media_type)
-            recommendations_text = response['choices'][0]['message']['content'].strip()
-            recommendations = parse_recommendations(recommendations_text)
-            valid_recommendations = [
-                rec for rec in recommendations
-                if isinstance(rec, dict) and all(key in rec for key in ('title', 'genre', 'description', 'reason'))
-            ]
-            if valid_recommendations:
-                recommendations_df = pd.DataFrame(valid_recommendations)
-                collection_name = f'AI Recommended {media_type}s'
-                missing_titles = create_collection_with_recommendations(plex, recommendations_df, media_type, collection_name)
-                if ombi_enabled:
-                    add_to_ombi(missing_titles, collection_name, config)
-                if trakt_enabled:
-                    add_to_trakt(missing_titles, collection_name, config)
+    try:
+        print(f"Requesting movie recommendations from the GPT-4o mini API...")
+        response = get_recommendations(prompt, "Movie")
+        recommendations_text = response['choices'][0]['message']['content'].strip()
+        recommendations = parse_recommendations(recommendations_text)
+        valid_recommendations = [
+            rec for rec in recommendations
+            if isinstance(rec, dict) and all(key in rec for key in ('title', 'genre', 'description', 'reason'))
+        ]
+        if valid_recommendations:
+            recommendations_df = pd.DataFrame(valid_recommendations)
+            collection_name = 'AI Recommended Movies'
+            missing_titles = create_collection_with_recommendations(plex, recommendations_df, "Movie", collection_name)
+            if ombi_enabled:
+                add_to_ombi(missing_titles, collection_name, config)
+            if trakt_enabled:
+                add_to_trakt(missing_titles, collection_name, config)
 
-                output_file = f'/output/{media_type.lower()}_recommendations.csv'
-                recommendations_df.to_csv(output_file, index=False)
-                print(f"\n{media_type} recommendations saved to '{output_file}'.")
-                updated_collections.append(collection_name)
-            else:
-                print(f"No valid {media_type.lower()} recommendations were found.")
-        except Exception as e:
-            print(f"An error occurred while processing {media_type.lower()} recommendations: {e}")
+            output_file = f'/output/movie_recommendations.csv'
+            recommendations_df.to_csv(output_file, index=False)
+            print(f"\nMovie recommendations saved to '{output_file}'.")
+            updated_collections.append(collection_name)
+        else:
+            print(f"No valid movie recommendations were found.")
+    except Exception as e:
+        print(f"An error occurred while processing movie recommendations: {e}")
 
     # Additional collections for Movies
     additional_collections = [
@@ -550,6 +549,18 @@ def main():
         ("Very Sarcastic Movies", "Recommend 10 highly sarcastic or satirical movies, similar in tone to 'Baby Mama (2008)' or 'They Came Together (2014)'.")
     ]
 
+    # Additional TV Show collections
+    additional_tv_collections = [
+        ("Seasonal", f"Recommend 10 TV shows suitable for {get_current_season()} season."),
+        ("Holiday", f"Recommend 10 TV shows suitable for {get_upcoming_holiday() or 'the upcoming holiday season'}."),
+        ("Romantic Comedy", "Recommend 10 top romantic comedy TV shows."),
+        ("Family Friendly", "Recommend 10 family-friendly TV shows suitable for all ages."),
+        ("Sci-Fi Spectacle", "Recommend 10 mind-bending science fiction TV shows."),
+        ("Classic TV Shows", "Recommend 10 classic TV shows from various decades that have stood the test of time."),
+        ("Based on True Story", "Recommend 10 compelling TV shows based on true stories or real events.")
+    ]
+
+    # Process additional movie collections
     for collection_name, recommendation_prompt in additional_collections:
         prompt = f"""
         Based on the following criteria:
@@ -569,7 +580,7 @@ def main():
         """
 
         try:
-            print(f"Requesting recommendations for {collection_name} collection...")
+            print(f"Requesting recommendations for {collection_name} movie collection...")
             response = get_recommendations(prompt, "Movie")
             recommendations_text = response['choices'][0]['message']['content'].strip()
             recommendations = parse_recommendations(recommendations_text)
@@ -585,14 +596,59 @@ def main():
                 if ombi_enabled:
                     add_to_ombi(missing_titles, collection_name, config)
 
-                output_file = f'/output/{collection_name.lower().replace(" ", "_")}_recommendations.csv'
+                output_file = f'/output/{collection_name.lower().replace(" ", "_")}_movie_recommendations.csv'
                 recommendations_df.to_csv(output_file, index=False)
-                print(f"\n{collection_name} recommendations saved to '{output_file}'.")
+                print(f"\n{collection_name} movie recommendations saved to '{output_file}'.")
                 updated_collections.append(collection_name)
             else:
-                print(f"No valid recommendations were found for {collection_name} collection.")
+                print(f"No valid recommendations were found for {collection_name} movie collection.")
         except Exception as e:
-            print(f"An error occurred while processing {collection_name} recommendations: {e}")
+            print(f"An error occurred while processing {collection_name} movie recommendations: {e}")
+
+    # Process additional TV show collections
+    for collection_name, recommendation_prompt in additional_tv_collections:
+        prompt = f"""
+        Based on the following criteria:
+
+        {recommendation_prompt}
+
+        For each recommendation, provide the following in JSON format:
+
+        {{
+          "title": "Title of the TV show",
+          "genre": "Genre(s)",
+          "description": "A brief description",
+          "reason": "A brief explanation of why this TV show fits the criteria"
+        }}
+
+        Please provide the entire response as a JSON array of objects.
+        """
+
+        try:
+            print(f"Requesting recommendations for {collection_name} TV show collection...")
+            response = get_recommendations(prompt, "TV Show")
+            recommendations_text = response['choices'][0]['message']['content'].strip()
+            recommendations = parse_recommendations(recommendations_text)
+            valid_recommendations = [
+                rec for rec in recommendations
+                if isinstance(rec, dict) and all(key in rec for key in ('title', 'genre', 'description', 'reason'))
+            ]
+            if valid_recommendations:
+                recommendations_df = pd.DataFrame(valid_recommendations)
+                missing_titles = create_collection_with_recommendations(plex, recommendations_df, "TV Show", collection_name)
+                if trakt_enabled:
+                    add_to_trakt(missing_titles, collection_name, config)
+                if ombi_enabled:
+                    add_to_ombi(missing_titles, collection_name, config)
+
+                output_file = f'/output/{collection_name.lower().replace(" ", "_")}_tv_show_recommendations.csv'
+                recommendations_df.to_csv(output_file, index=False)
+                print(f"\n{collection_name} TV show recommendations saved to '{output_file}'.")
+                updated_collections.append(collection_name)
+            else:
+                print(f"No valid recommendations were found for {collection_name} TV show collection.")
+        except Exception as e:
+            print(f"An error occurred while processing {collection_name} TV show recommendations: {e}")
 
     print("\nUpdated collections:")
     for collection in updated_collections:
