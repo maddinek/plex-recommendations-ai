@@ -4,4 +4,4 @@ plexapi
 configparser
 podman-compose
 aiohttp
-
+trakt.py
